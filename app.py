@@ -4,10 +4,10 @@ import streamlit as st
 
 st.set_page_config(page_title="Temp Picking Console", layout="wide")
 st.title("Temp Picking Console")
-st.caption("输入 Seller SKU 列表（粘贴 / 上传 CSV / 上传 Excel）→ 输出 Name × S/M/L × 小计，并导出 CSV")
+st.caption("拣货汇总：按 Name 字母顺序；售出数字列：按固定 SKU 顺序输出（无表头、缺失=0、未知SKU报错）")
 
 # =====================================================
-# 内置完整 SKU → Name 映射表（你给的最终版）
+# SKU -> Name 映射（你给的最终版）
 # =====================================================
 SKU_NAME_MAP = {
     "NDF001":"Tropic Paradise","NPX014":"Afterglow","NDX001":"Pinky Promise","NHF001":"Gothic Moon","NHX001":"Emerald Garden",
@@ -46,68 +46,323 @@ SKU_NAME_MAP = {
 }
 
 # =====================================================
-# Helpers
+# 固定 SKU 顺序（只用于最后数字列）
 # =====================================================
+FIXED_SKU_ORDER_TEXT = """NPF001-S
+NPF001-M
+NPF001-L
+NPF005-S
+NPF005-M
+NPF005-L
+NPF002-S
+NPF002-M
+NPF002-L
+NPJ005-S
+NPJ005-M
+NPJ005-L
+NPJ004-S
+NPJ004-M
+NPJ004-L
+NLJ002-S
+NLJ002-M
+NLJ002-L
+NPX005-S
+NPX005-M
+NPX005-L
+NPX002-S
+NPX002-M
+NPX002-L
+NPX001-S
+NPX001-M
+NPX001-L
+NPX007-S
+NPX007-M
+NPX007-L
+NPF007-S
+NPF007-M
+NPF007-L
+NPF009-S
+NPF009-M
+NPF009-L
+NPJ007-S
+NPJ007-M
+NPJ007-L
+NPX009-S
+NPX009-M
+NPX009-L
+NHF001-S
+NHF001-M
+NHF001-L
+NPF012-S
+NPF012-M
+NPF012-L
+NOF001-S
+NOF001-M
+NOF001-L
+NDF001-S
+NDF001-M
+NDF001-L
+NDX001-S
+NDX001-M
+NDX001-L
+NPX013-S
+NPX013-M
+NPX013-L
+NPX014-S
+NPX014-M
+NPX014-L
+NOF008-S
+NOF008-M
+NOF008-L
+NOF009-S
+NOF009-M
+NOF009-L
+NPF014-S
+NPF014-M
+NPF014-L
+NPF016-S
+NPF016-M
+NPF016-L
+NPF017-S
+NPF017-M
+NPF017-L
+NPF015-S
+NPF015-M
+NPF015-L
+NOF011-S
+NOF011-M
+NOF011-L
+NOF010-S
+NOF010-M
+NOF010-L
+NOX004-S
+NOX004-M
+NOX004-L
+NPX016-S
+NPX016-M
+NPX016-L
+NOF013-S
+NOF013-M
+NOF013-L
+NPX017-S
+NPX017-M
+NPX017-L
+NOF012-S
+NOF012-M
+NOF012-L
+NPJ012-S
+NPJ012-M
+NPJ012-L
+NPF018-S
+NPF018-M
+NPF018-L
+NOX006-S
+NOX006-M
+NOX006-L
+NIX001-S
+NIX001-M
+NIX001-L
+NOX007-S
+NOX007-M
+NOX007-L
+NOF014-S
+NOF014-M
+NOF014-L
+NPF019-S
+NPF019-M
+NPF019-L
+NOF015-S
+NOF015-M
+NOF015-L
+NOX009-S
+NOX009-M
+NOX009-L
+NOX008-S
+NOX008-M
+NOX008-L
+NPX018-S
+NPX018-M
+NPX018-L
+NPF020-S
+NPF020-M
+NPF020-L
+NOJ006-S
+NOJ006-M
+NOJ006-L
+NOJ007-S
+NOJ007-M
+NOJ007-L
+NOX011-S
+NOX011-M
+NOX011-L
+NOF016-S
+NOF016-M
+NOF016-L
+NPX020-S
+NPX020-M
+NPX020-L
+NPX019-S
+NPX019-M
+NPX019-L
+NPJ013-S
+NPJ013-M
+NPJ013-L
+NOX012-S
+NOX012-M
+NOX012-L
+NOJ008-S
+NOJ008-M
+NOJ008-L
+NOF018-S
+NOF018-M
+NOF018-L
+NOJ010-S
+NOJ010-M
+NOJ010-L
+NIX002-S
+NIX002-M
+NIX002-L
+NPJ014-S
+NPJ014-M
+NPJ014-L
+NPJ017-S
+NPJ017-M
+NPJ017-L
+NPJ016-S
+NPJ016-M
+NPJ016-L
+NPJ015-S
+NPJ015-M
+NPJ015-L
+NOX014-S
+NOX014-M
+NOX014-L
+NIF001-S
+NIF001-M
+NIF001-L
+NOX015-S
+NOX015-M
+NOX015-L
+NPX024-S
+NPX024-M
+NPX024-L
+NPX023-S
+NPX023-M
+NPX023-L
+NMF001-S
+NMF001-M
+NMF001-L
+NOF021-S
+NOF021-M
+NOF021-L
+NOJ012-S
+NOJ012-M
+NOJ012-L
+NMF002-S
+NMF002-M
+NMF002-L
+NMF003-S
+NMF003-M
+NMF003-L
+NBX001-S
+NBX001-M
+NBX001-L
+NOJ014-S
+NOJ014-M
+NOJ014-L
+NOJ013-S
+NOJ013-M
+NOJ013-L
+NVF001-S
+NVF001-M
+NVF001-L
+NPX025-S
+NPX025-M
+NPX025-L
+NPJ019-S
+NPJ019-M
+NPJ019-L
+NOJ015-S
+NOJ015-M
+NOJ015-L
+NOF022-S
+NOF022-M
+NOF022-L
+NOF023-S
+NOF023-M
+NOF023-L
+NDJ001-S
+NDJ001-M
+NDJ001-L
+NOX016-S
+NOX016-M
+NOX016-L
+NOX017-S
+NOX017-M
+NOX017-L
+NMF004-S
+NMF004-M
+NMF004-L
+NDX002-S
+NDX002-M
+NDX002-L
+NMJ003-S
+NMJ003-M
+NMJ003-L
+NOF025-S
+NOF025-M
+NOF025-L
+NMJ001-S
+NMJ001-M
+NMJ001-L
+NMX001-S
+NMX001-M
+NMX001-L
+NOF024-S
+NOF024-M
+NOF024-L"""
+
+FIXED_SKU_ORDER = [x.strip() for x in FIXED_SKU_ORDER_TEXT.splitlines() if x.strip()]
+FIXED_SKU_SET = set(FIXED_SKU_ORDER)
+
 SIZE_SET = {"S", "M", "L"}
 
 def normalize_colname(s: str) -> str:
-    """Lowercase, remove spaces/underscores for robust matching."""
     return re.sub(r"[\s_]+", "", str(s).strip().lower())
 
-def parse_sku(line: str):
-    """Return (base_sku, size_or_None) or None."""
-    if line is None:
-        return None
-    s = str(line).strip()
+def parse_sku_strict(x: object):
+    """
+    严格只接受：
+      - BASE-S/M/L
+      - BASE（无尺码）
+    """
+    if x is None:
+        return ("", "", None, False)
+    s = str(x).strip()
     if not s:
-        return None
+        return ("", "", None, False)
 
-    # exact form: BASE-S|M|L
     m = re.match(r"^([A-Z0-9]+)-([SML])$", s)
     if m:
-        return m.group(1), m.group(2)
+        return (s, m.group(1), m.group(2), True)
 
-    # no-size: BASE only
     if re.match(r"^[A-Z0-9]+$", s):
-        return s, None
+        return (s, s, None, True)
 
-    # if there are extra spaces or text, try to extract SKU token
-    token = re.search(r"([A-Z0-9]+(?:-[SML])?)", s)
-    if token:
-        t = token.group(1)
-        m2 = re.match(r"^([A-Z0-9]+)-([SML])$", t)
-        if m2:
-            return m2.group(1), m2.group(2)
-        if re.match(r"^[A-Z0-9]+$", t):
-            return t, None
+    return (s, "", None, False)
 
-    return None
+def build_picking_summary(df_parsed: pd.DataFrame):
+    """
+    汇总表：Name | Base SKU | S | M | L | Subtotal
+    按 Name 字母顺序；UNKNOWN 最后
+    """
+    valid_df = df_parsed[df_parsed["valid"]].copy()
+    if valid_df.empty:
+        empty = pd.DataFrame(columns=["Name","Base SKU","S","M","L","Subtotal"])
+        return empty, {"parsed_lines": 0, "grand_total": 0, "unknown_bases": []}
 
-def build_picking_table(sku_list: list[str]) -> tuple[pd.DataFrame, dict]:
-    """Aggregate into Name|Base SKU|S|M|L|Subtotal, with audits."""
-    parsed_rows = []
-    for x in sku_list:
-        res = parse_sku(x)
-        if not res:
-            continue
-        base, size = res
-        parsed_rows.append({"base": base, "size": size})
-
-    df = pd.DataFrame(parsed_rows)
-    if df.empty:
-        return pd.DataFrame(columns=["Name","Base SKU","S","M","L","Subtotal"]), {
-            "input_lines": len(sku_list),
-            "parsed_lines": 0,
-            "sml_total": 0,
-            "nosize_total": 0,
-            "grand_total": 0,
-            "unknown_bases": []
-        }
-
-    parsed_lines = len(df)
-
-    sized = df[df["size"].isin(list(SIZE_SET))].copy()
-    nosize = df[df["size"].isna()].copy()
+    sized = valid_df[valid_df["size"].isin(list(SIZE_SET))]
+    nosize = valid_df[valid_df["size"].isna()]
 
     if not sized.empty:
         pivot = sized.groupby(["base","size"]).size().unstack(fill_value=0).reset_index()
@@ -127,47 +382,56 @@ def build_picking_table(sku_list: list[str]) -> tuple[pd.DataFrame, dict]:
     out["Name"] = out["base"].map(SKU_NAME_MAP).fillna("UNKNOWN")
 
     df_out = out.rename(columns={"base":"Base SKU"})[["Name","Base SKU","S","M","L","Subtotal"]].copy()
-
-    # sort by name, keep UNKNOWN last
     df_out["_unk"] = (df_out["Name"] == "UNKNOWN").astype(int)
     df_out = df_out.sort_values(["_unk","Name","Base SKU"]).drop(columns="_unk").reset_index(drop=True)
 
-    sml_total = int(df_out["S"].sum() + df_out["M"].sum() + df_out["L"].sum())
-    grand_total = int(df_out["Subtotal"].sum())
-    nosize_total = int(grand_total - sml_total)
-
     unknown_bases = sorted(df_out.loc[df_out["Name"]=="UNKNOWN", "Base SKU"].unique().tolist())
-
-    audit = {
-        "input_lines": len(sku_list),
-        "parsed_lines": parsed_lines,
-        "sml_total": sml_total,
-        "nosize_total": nosize_total,
-        "grand_total": grand_total,
-        "unknown_bases": unknown_bases
-    }
+    audit = {"parsed_lines": int(len(valid_df)), "grand_total": int(df_out["Subtotal"].sum()), "unknown_bases": unknown_bases}
     return df_out, audit
 
-def csv_bytes(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8-sig")
+def build_sold_qty_fixed_order(df_parsed: pd.DataFrame):
+    """
+    最后数字列：严格按 FIXED_SKU_ORDER 输出（无表头）
+      - FIXED 里没出现 => 0
+      - 拣货单里出现了带尺码 SKU 但不在 FIXED => 报错
+      - 行数 = len(FIXED_SKU_ORDER)
+    """
+    valid_df = df_parsed[df_parsed["valid"]].copy()
+    # 只对“带尺码 SKU”做强校验
+    sized_skus = valid_df.loc[valid_df["size"].isin(list(SIZE_SET)), "raw_sku"].tolist()
+
+    unknown_in_input = sorted(set([s for s in sized_skus if s not in FIXED_SKU_SET]))
+    if unknown_in_input:
+        raise ValueError("拣货单中出现了不在固定SKU清单里的 SKU（带尺码）：\n" + "\n".join(unknown_in_input))
+
+    counts = pd.Series(sized_skus).value_counts().to_dict()
+    sold = [int(counts.get(sku, 0)) for sku in FIXED_SKU_ORDER]
+    return pd.DataFrame(sold)
+
+def csv_bytes(df: pd.DataFrame, header=True) -> bytes:
+    return df.to_csv(index=False, header=header).encode("utf-8-sig")
 
 # =====================================================
-# UI
+# 输入
 # =====================================================
 st.subheader("输入方式")
 mode = st.radio("选择一种输入方式", ["上传文件（CSV / Excel）", "粘贴文本（每行一个 SKU）"], horizontal=True)
 
-sku_list = []
+sku_series = None
 
 if mode == "上传文件（CSV / Excel）":
     uploaded = st.file_uploader("上传 CSV 或 Excel（.xlsx）", type=["csv", "xlsx"])
     if uploaded is not None:
-        # Read file
         try:
             if uploaded.name.lower().endswith(".csv"):
                 df_in = pd.read_csv(uploaded)
             else:
                 df_in = pd.read_excel(uploaded)
+        except ImportError as e:
+            if "openpyxl" in str(e):
+                st.error("缺少 openpyxl：pip install openpyxl，然后重启 Streamlit。")
+                st.stop()
+            raise
         except Exception as e:
             st.error(f"文件读取失败：{e}")
             st.stop()
@@ -175,82 +439,92 @@ if mode == "上传文件（CSV / Excel）":
         st.write("文件预览：")
         st.dataframe(df_in.head(20), use_container_width=True)
 
-        # Auto-detect SKU column
-        candidates = []
+        # 自动识别 SKU 列
         norm_to_raw = {normalize_colname(c): c for c in df_in.columns}
+        preferred_norms = [normalize_colname(x) for x in ["Seller SKU", "SellerSKU", "seller_sku", "SKU", "Platform SKU"]]
 
-        preferred_norms = [
-            normalize_colname("Seller SKU"),
-            normalize_colname("Seller sku"),
-            normalize_colname("seller_sku"),
-            normalize_colname("SellerSKU"),
-            normalize_colname("SKU"),
-            normalize_colname("Platform SKU"),
-        ]
-
+        guess = None
         for p in preferred_norms:
             if p in norm_to_raw:
-                candidates.append(norm_to_raw[p])
-
-        # Fallback: any col contains 'sku'
-        if not candidates:
+                guess = norm_to_raw[p]
+                break
+        if guess is None:
             for c in df_in.columns:
                 if "sku" in normalize_colname(c):
-                    candidates.append(c)
+                    guess = c
+                    break
 
-        col_pick = st.selectbox(
-            "选择 SKU 列（自动识别结果可直接用，也可手动改）",
-            options=df_in.columns.tolist(),
-            index=(df_in.columns.get_loc(candidates[0]) if candidates else 0)
-        )
-
-        # Build sku list from selected column
-        sku_series = df_in[col_pick].dropna().astype(str).tolist()
-        sku_list = [s.strip() for s in sku_series if s.strip()]
-
-        st.info(f"已读取 {len(sku_list)} 行 SKU（来自列：{col_pick}）")
+        col_pick = st.selectbox("选择 SKU 列", options=df_in.columns.tolist(),
+                                index=(df_in.columns.get_loc(guess) if guess in df_in.columns else 0))
+        sku_series = df_in[col_pick]
 
 else:
-    sku_text = st.text_area(
-        "粘贴 Seller SKU（每行一个）",
-        height=260,
-        placeholder="NPX017-S\nNHF001-M\nNF001\n..."
-    )
+    sku_text = st.text_area("粘贴 Seller SKU（每行一个）", height=260, placeholder="NPX017-S\nNHF001-M\nNF001\n...")
     lines = [ln.strip() for ln in sku_text.splitlines() if ln.strip()]
-    # ignore simple header variants
     header_blacklist = {"seller sku", "seller sku input by the seller in the product system"}
-    sku_list = [ln for ln in lines if ln.strip().lower() not in header_blacklist]
-    st.info(f"已读取 {len(sku_list)} 行 SKU（粘贴输入）")
+    lines = [ln for ln in lines if ln.lower() not in header_blacklist]
+    sku_series = pd.Series(lines)
 
 st.divider()
 
-if st.button("生成拣货表", type="primary", disabled=(len(sku_list) == 0)):
-    df_out, audit = build_picking_table(sku_list)
+if st.button("生成（拣货汇总 + 售出数字列）", type="primary", disabled=(sku_series is None or len(sku_series) == 0)):
+    # 解析输入
+    parsed = []
+    for x in sku_series.tolist():
+        raw, base, size, valid = parse_sku_strict(x)
+        parsed.append({"raw_sku": raw, "base": base, "size": size, "valid": valid})
+    df_parsed = pd.DataFrame(parsed)
 
+    valid_lines = int(df_parsed["valid"].sum())
+    invalid_lines = int(len(df_parsed) - valid_lines)
+
+    if invalid_lines > 0:
+        bad_samples = df_parsed.loc[~df_parsed["valid"], "raw_sku"].head(20).tolist()
+        st.error("输入中存在无法解析的行（只允许 BASE 或 BASE-S/M/L）。示例：\n" + "\n".join(bad_samples))
+        st.stop()
+
+    # 1) 拣货汇总（Name 字母顺序）
+    df_pick, audit = build_picking_summary(df_parsed)
+
+    # 校验：汇总 Subtotal 必须等于输入可解析行数
+    if int(df_pick["Subtotal"].sum()) != audit["parsed_lines"]:
+        st.error("校验失败：拣货汇总总计 != 输入行数（请检查输入）")
+        st.stop()
+
+    # 2) 售出数字列（固定顺序）
+    try:
+        df_sold = build_sold_qty_fixed_order(df_parsed)
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
+
+    # 指标
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("输入行数", audit["input_lines"])
-    c2.metric("成功解析行数", audit["parsed_lines"])
-    c3.metric("S+M+L 合计", audit["sml_total"])
-    c4.metric("总计（含无尺码）", audit["grand_total"])
-
-    if audit["grand_total"] != audit["parsed_lines"]:
-        st.error(
-            "⚠️ 校验失败：汇总总计 != 解析行数。\n"
-            "通常是输入里存在格式异常（例如多余字符、逗号、SKU 被拆列）。"
-        )
-    else:
-        st.success("✅ 校验通过：汇总总计与解析行数一致")
+    c1.metric("输入行数", int(len(df_parsed)))
+    c2.metric("拣货汇总总计", int(df_pick["Subtotal"].sum()))
+    c3.metric("固定顺序行数", len(FIXED_SKU_ORDER))
+    c4.metric("售出合计（S/M/L）", int(df_sold.sum().iloc[0]))
 
     if audit["unknown_bases"]:
-        st.warning("以下 Base SKU 在映射表中未找到（标记为 UNKNOWN）：")
+        st.warning("以下 Base SKU 在映射表中未找到（Name=UNKNOWN）：")
         st.code(", ".join(audit["unknown_bases"]))
 
-    st.subheader("拣货汇总表（Name 第一列，缺尺码=0，按 Name 排序）")
-    st.dataframe(df_out, use_container_width=True)
-
+    # 输出：拣货汇总表
+    st.subheader("拣货汇总表（按 Name 字母顺序，UNKNOWN 最后）")
+    st.dataframe(df_pick, use_container_width=True, hide_index=True)
     st.download_button(
-        "下载 CSV",
-        data=csv_bytes(df_out),
-        file_name="temp_picking_list.csv",
+        "下载拣货汇总 CSV",
+        data=csv_bytes(df_pick, header=True),
+        file_name="picking_summary.csv",
+        mime="text/csv"
+    )
+
+    # 输出：售出数字列（无表头）
+    st.subheader("售出统计数字列（严格按固定 SKU 顺序，无表头）")
+    st.dataframe(df_sold, use_container_width=True, hide_index=True)
+    st.download_button(
+        "下载售出数字列 CSV（无表头）",
+        data=csv_bytes(df_sold, header=False),
+        file_name="sold_qty_column.csv",
         mime="text/csv"
     )
