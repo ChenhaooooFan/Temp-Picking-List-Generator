@@ -7,9 +7,10 @@ st.title("Temp Picking Console")
 st.caption("两个独立功能：A) 拣货汇总表（按 Name 排序）  B) 售出数字列（固定 SKU 顺序、无表头）")
 
 # =====================================================
-# SKU -> Name 映射（你给的最终版）
+# SKU -> Name 映射（最终版 + 新增 NB001）
 # =====================================================
 SKU_NAME_MAP = {
+    "NB001": "Nail Book",  # ✅ 新增
     "NDF001":"Tropic Paradise","NPX014":"Afterglow","NDX001":"Pinky Promise","NHF001":"Gothic Moon","NHX001":"Emerald Garden",
     "NLF001":"Divine Emblem","NLF002":"Athena's Glow","NLJ001":"Golden Pearl","NLJ002":"BAROQUE BLISS","NLJ003":"Rainbow Reef",
     "NLX001":"Mermaid's Whisper","NLX003":"Tropical Tide","NLX005":"Pure Grace","NOF001":"Royal Amber","NOF002":"Tiger Lily",
@@ -42,7 +43,7 @@ SKU_NAME_MAP = {
     "NPX025":"Cocoa Teddy","NVF001":"Golden Bloom","NBJ002":"Cherry Drop","NOF022":"Aqua Reverie",
     "NPF023":"Arctic Starlight","NDJ001":"Snow Knit","NOX016":"Cherry Ribbon","NOX017":"Ruby Bow",
     "NMF004":"Lavender Bloom","NDX002":"Cloudy Knit","NMJ003":"Gothic Rose","NOF025":"Cherry Romance",
-    "NMJ001":"Milky Cloud","NMX001":"Petal Muse","NOF024":"Floral Muse","NB001":"Nail Book"
+    "NMJ001":"Milky Cloud","NMX001":"Petal Muse","NOF024":"Floral Muse"
 }
 
 # =====================================================
@@ -324,6 +325,17 @@ NOF024-L"""
 
 FIXED_SKU_ORDER = [x.strip() for x in FIXED_SKU_ORDER_TEXT.splitlines() if x.strip()]
 FIXED_SKU_SET = set(FIXED_SKU_ORDER)
+
+# =====================================================
+# 不统计库存的 SKU（带尺码 SKU 精确到 -S/-M/-L）
+# 你现在提到的是 NPX006-M / NPX006-L（可按需继续加）
+# =====================================================
+SKIP_INVENTORY_SKUS = {
+    "NPX006-M",
+    "NPX006-L",
+    # 如果未来还有：例如 "NPX006-S" 也要跳过，就加在这里
+}
+
 SIZE_SET = {"S", "M", "L"}
 
 
@@ -361,6 +373,10 @@ def build_picking_summary(df_parsed: pd.DataFrame):
     """
     拣货汇总表：Name | Base SKU | S | M | L | Subtotal
     按 Name 字母顺序；UNKNOWN 最后
+
+    注意：拣货汇总这里不会因为“跳过库存”而剔除，
+    因为你没说拣货汇总要跳过（你只说库存统计跳过）
+    如果你希望拣货汇总也跳过 NPX006-*，我可以再改一行过滤。
     """
     valid_df = df_parsed[df_parsed["valid"]].copy()
     if valid_df.empty:
@@ -403,22 +419,27 @@ def build_sold_qty_fixed_order(df_parsed: pd.DataFrame):
     """
     售出数字列：严格按 FIXED_SKU_ORDER 输出（无表头）
       - FIXED 里没出现 => 0
-      - 拣货单里出现了带尺码 SKU 但不在 FIXED => 报错
+      - 拣货单里出现了带尺码 SKU 且不在 FIXED、并且不在 SKIP => 报错
+      - SKIP_INVENTORY_SKUS：完全跳过，不统计、不报错
       - 行数 = len(FIXED_SKU_ORDER)
     """
     valid_df = df_parsed[df_parsed["valid"]].copy()
-    sized_skus = valid_df.loc[valid_df["size"].isin(list(SIZE_SET)), "raw_sku"].tolist()
 
+    sized_skus_all = valid_df.loc[valid_df["size"].isin(list(SIZE_SET)), "raw_sku"].tolist()
+
+    # 先把 skip 的去掉（不统计库存）
+    sized_skus = [s for s in sized_skus_all if s not in SKIP_INVENTORY_SKUS]
+
+    # 只对剩下的做“必须在 FIXED”校验
     unknown_in_input = sorted(set([s for s in sized_skus if s not in FIXED_SKU_SET]))
     if unknown_in_input:
         raise ValueError(
-            "拣货单中出现了不在固定SKU清单里的 SKU（带尺码）：\n" + "\n".join(unknown_in_input)
+            "拣货单中出现了不在固定SKU清单里的 SKU（带尺码，且未在跳过列表中）：\n" + "\n".join(unknown_in_input)
         )
 
     counts = pd.Series(sized_skus).value_counts().to_dict()
     sold = [int(counts.get(sku, 0)) for sku in FIXED_SKU_ORDER]
 
-    # 强制行数一致
     if len(sold) != len(FIXED_SKU_ORDER):
         raise ValueError("内部错误：售出列行数不一致（请检查固定 SKU 列表）")
 
@@ -453,7 +474,6 @@ if mode == "上传文件（CSV / Excel）":
         st.write("文件预览：")
         st.dataframe(df_in.head(20), use_container_width=True)
 
-        # 自动识别 SKU 列 + 可手选
         norm_to_raw = {normalize_colname(c): c for c in df_in.columns}
         preferred_norms = [normalize_colname(x) for x in ["Seller SKU", "SellerSKU", "seller_sku", "SKU", "Platform SKU"]]
 
@@ -482,7 +502,7 @@ else:
     lines = [ln for ln in lines if ln.lower() not in header_blacklist]
     sku_series = pd.Series(lines)
 
-# 统一解析（一次解析，两边按钮复用）
+# 统一解析
 df_parsed = None
 if sku_series is not None and len(sku_series) > 0:
     parsed = []
@@ -494,13 +514,13 @@ if sku_series is not None and len(sku_series) > 0:
 st.divider()
 
 # =====================================================
-# 两个独立功能：Tabs + 独立按钮
+# 两个独立功能
 # =====================================================
 tab_a, tab_b = st.tabs(["A) 拣货汇总表（Name 排序）", "B) 售出数字列（固定顺序）"])
 
 with tab_a:
     st.subheader("A) 拣货汇总表（按 Name 字母顺序）")
-    btn_a = st.button("生成拣货汇总表", type="primary", disabled=(df_parsed is None))
+    btn_a = st.button("生成拣货汇总表", type="primary", disabled=(df_parsed is None), key="btn_a")
 
     if btn_a:
         invalid_lines = int((~df_parsed["valid"]).sum())
@@ -511,7 +531,6 @@ with tab_a:
 
         df_pick, audit = build_picking_summary(df_parsed)
 
-        # 校验：Subtotal 合计 == 输入行数（有效行数）
         if int(df_pick["Subtotal"].sum()) != audit["parsed_lines"]:
             st.error("校验失败：拣货汇总总计 != 输入行数（请检查输入）")
             st.stop()
@@ -535,7 +554,9 @@ with tab_a:
 
 with tab_b:
     st.subheader("B) 售出统计数字列（严格固定 SKU 顺序，无表头）")
-    btn_b = st.button("生成售出数字列", type="primary", disabled=(df_parsed is None))
+    st.caption("说明：NPX006-M / NPX006-L 已加入跳过列表，不统计库存，也不会报错。")
+
+    btn_b = st.button("生成售出数字列", type="primary", disabled=(df_parsed is None), key="btn_b")
 
     if btn_b:
         invalid_lines = int((~df_parsed["valid"]).sum())
@@ -551,7 +572,7 @@ with tab_b:
             st.stop()
 
         st.write(f"固定 SKU 行数：{len(FIXED_SKU_ORDER)}")
-        st.write(f"售出合计（S/M/L）：{int(df_sold.sum().iloc[0])}")
+        st.write(f"售出合计（S/M/L，已排除跳过SKU）：{int(df_sold.sum().iloc[0])}")
 
         st.dataframe(df_sold, use_container_width=True, hide_index=True)
         st.download_button(
