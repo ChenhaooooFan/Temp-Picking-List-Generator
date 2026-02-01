@@ -4,7 +4,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Temp Picking Console", layout="wide")
 st.title("Temp Picking Console")
-st.caption("拣货汇总：按 Name 字母顺序；售出数字列：按固定 SKU 顺序输出（无表头、缺失=0、未知SKU报错）")
+st.caption("两个独立功能：A) 拣货汇总表（按 Name 排序）  B) 售出数字列（固定 SKU 顺序、无表头）")
 
 # =====================================================
 # SKU -> Name 映射（你给的最终版）
@@ -46,7 +46,7 @@ SKU_NAME_MAP = {
 }
 
 # =====================================================
-# 固定 SKU 顺序（只用于最后数字列）
+# 固定 SKU 顺序（只用于“售出数字列”）
 # =====================================================
 FIXED_SKU_ORDER_TEXT = """NPF001-S
 NPF001-M
@@ -324,11 +324,12 @@ NOF024-L"""
 
 FIXED_SKU_ORDER = [x.strip() for x in FIXED_SKU_ORDER_TEXT.splitlines() if x.strip()]
 FIXED_SKU_SET = set(FIXED_SKU_ORDER)
-
 SIZE_SET = {"S", "M", "L"}
+
 
 def normalize_colname(s: str) -> str:
     return re.sub(r"[\s_]+", "", str(s).strip().lower())
+
 
 def parse_sku_strict(x: object):
     """
@@ -351,70 +352,83 @@ def parse_sku_strict(x: object):
 
     return (s, "", None, False)
 
+
+def csv_bytes(df: pd.DataFrame, header=True) -> bytes:
+    return df.to_csv(index=False, header=header).encode("utf-8-sig")
+
+
 def build_picking_summary(df_parsed: pd.DataFrame):
     """
-    汇总表：Name | Base SKU | S | M | L | Subtotal
+    拣货汇总表：Name | Base SKU | S | M | L | Subtotal
     按 Name 字母顺序；UNKNOWN 最后
     """
     valid_df = df_parsed[df_parsed["valid"]].copy()
     if valid_df.empty:
-        empty = pd.DataFrame(columns=["Name","Base SKU","S","M","L","Subtotal"])
+        empty = pd.DataFrame(columns=["Name", "Base SKU", "S", "M", "L", "Subtotal"])
         return empty, {"parsed_lines": 0, "grand_total": 0, "unknown_bases": []}
 
     sized = valid_df[valid_df["size"].isin(list(SIZE_SET))]
     nosize = valid_df[valid_df["size"].isna()]
 
     if not sized.empty:
-        pivot = sized.groupby(["base","size"]).size().unstack(fill_value=0).reset_index()
+        pivot = sized.groupby(["base", "size"]).size().unstack(fill_value=0).reset_index()
     else:
         pivot = pd.DataFrame({"base": []})
 
-    for c in ["S","M","L"]:
+    for c in ["S", "M", "L"]:
         if c not in pivot.columns:
             pivot[c] = 0
 
-    nosize_cnt = nosize.groupby("base").size().reset_index(name="NOSIZE") if not nosize.empty else pd.DataFrame({"base": [], "NOSIZE": []})
+    nosize_cnt = (
+        nosize.groupby("base").size().reset_index(name="NOSIZE")
+        if not nosize.empty else pd.DataFrame({"base": [], "NOSIZE": []})
+    )
 
     out = pivot.merge(nosize_cnt, on="base", how="outer").fillna(0)
-    out[["S","M","L","NOSIZE"]] = out[["S","M","L","NOSIZE"]].astype(int)
+    out[["S", "M", "L", "NOSIZE"]] = out[["S", "M", "L", "NOSIZE"]].astype(int)
 
     out["Subtotal"] = out["S"] + out["M"] + out["L"] + out["NOSIZE"]
     out["Name"] = out["base"].map(SKU_NAME_MAP).fillna("UNKNOWN")
 
-    df_out = out.rename(columns={"base":"Base SKU"})[["Name","Base SKU","S","M","L","Subtotal"]].copy()
+    df_out = out.rename(columns={"base": "Base SKU"})[["Name", "Base SKU", "S", "M", "L", "Subtotal"]].copy()
     df_out["_unk"] = (df_out["Name"] == "UNKNOWN").astype(int)
-    df_out = df_out.sort_values(["_unk","Name","Base SKU"]).drop(columns="_unk").reset_index(drop=True)
+    df_out = df_out.sort_values(["_unk", "Name", "Base SKU"]).drop(columns="_unk").reset_index(drop=True)
 
-    unknown_bases = sorted(df_out.loc[df_out["Name"]=="UNKNOWN", "Base SKU"].unique().tolist())
+    unknown_bases = sorted(df_out.loc[df_out["Name"] == "UNKNOWN", "Base SKU"].unique().tolist())
     audit = {"parsed_lines": int(len(valid_df)), "grand_total": int(df_out["Subtotal"].sum()), "unknown_bases": unknown_bases}
     return df_out, audit
 
+
 def build_sold_qty_fixed_order(df_parsed: pd.DataFrame):
     """
-    最后数字列：严格按 FIXED_SKU_ORDER 输出（无表头）
+    售出数字列：严格按 FIXED_SKU_ORDER 输出（无表头）
       - FIXED 里没出现 => 0
       - 拣货单里出现了带尺码 SKU 但不在 FIXED => 报错
       - 行数 = len(FIXED_SKU_ORDER)
     """
     valid_df = df_parsed[df_parsed["valid"]].copy()
-    # 只对“带尺码 SKU”做强校验
     sized_skus = valid_df.loc[valid_df["size"].isin(list(SIZE_SET)), "raw_sku"].tolist()
 
     unknown_in_input = sorted(set([s for s in sized_skus if s not in FIXED_SKU_SET]))
     if unknown_in_input:
-        raise ValueError("拣货单中出现了不在固定SKU清单里的 SKU（带尺码）：\n" + "\n".join(unknown_in_input))
+        raise ValueError(
+            "拣货单中出现了不在固定SKU清单里的 SKU（带尺码）：\n" + "\n".join(unknown_in_input)
+        )
 
     counts = pd.Series(sized_skus).value_counts().to_dict()
     sold = [int(counts.get(sku, 0)) for sku in FIXED_SKU_ORDER]
+
+    # 强制行数一致
+    if len(sold) != len(FIXED_SKU_ORDER):
+        raise ValueError("内部错误：售出列行数不一致（请检查固定 SKU 列表）")
+
     return pd.DataFrame(sold)
 
-def csv_bytes(df: pd.DataFrame, header=True) -> bytes:
-    return df.to_csv(index=False, header=header).encode("utf-8-sig")
 
 # =====================================================
-# 输入
+# 输入区（一次输入，两边功能共用）
 # =====================================================
-st.subheader("输入方式")
+st.subheader("输入")
 mode = st.radio("选择一种输入方式", ["上传文件（CSV / Excel）", "粘贴文本（每行一个 SKU）"], horizontal=True)
 
 sku_series = None
@@ -439,7 +453,7 @@ if mode == "上传文件（CSV / Excel）":
         st.write("文件预览：")
         st.dataframe(df_in.head(20), use_container_width=True)
 
-        # 自动识别 SKU 列
+        # 自动识别 SKU 列 + 可手选
         norm_to_raw = {normalize_colname(c): c for c in df_in.columns}
         preferred_norms = [normalize_colname(x) for x in ["Seller SKU", "SellerSKU", "seller_sku", "SKU", "Platform SKU"]]
 
@@ -454,77 +468,95 @@ if mode == "上传文件（CSV / Excel）":
                     guess = c
                     break
 
-        col_pick = st.selectbox("选择 SKU 列", options=df_in.columns.tolist(),
-                                index=(df_in.columns.get_loc(guess) if guess in df_in.columns else 0))
+        col_pick = st.selectbox(
+            "选择 SKU 列",
+            options=df_in.columns.tolist(),
+            index=(df_in.columns.get_loc(guess) if guess in df_in.columns else 0)
+        )
         sku_series = df_in[col_pick]
 
 else:
-    sku_text = st.text_area("粘贴 Seller SKU（每行一个）", height=260, placeholder="NPX017-S\nNHF001-M\nNF001\n...")
+    sku_text = st.text_area("粘贴 Seller SKU（每行一个）", height=240, placeholder="NPX017-S\nNHF001-M\nNF001\n...")
     lines = [ln.strip() for ln in sku_text.splitlines() if ln.strip()]
     header_blacklist = {"seller sku", "seller sku input by the seller in the product system"}
     lines = [ln for ln in lines if ln.lower() not in header_blacklist]
     sku_series = pd.Series(lines)
 
-st.divider()
-
-if st.button("生成（拣货汇总 + 售出数字列）", type="primary", disabled=(sku_series is None or len(sku_series) == 0)):
-    # 解析输入
+# 统一解析（一次解析，两边按钮复用）
+df_parsed = None
+if sku_series is not None and len(sku_series) > 0:
     parsed = []
     for x in sku_series.tolist():
         raw, base, size, valid = parse_sku_strict(x)
         parsed.append({"raw_sku": raw, "base": base, "size": size, "valid": valid})
     df_parsed = pd.DataFrame(parsed)
 
-    valid_lines = int(df_parsed["valid"].sum())
-    invalid_lines = int(len(df_parsed) - valid_lines)
+st.divider()
 
-    if invalid_lines > 0:
-        bad_samples = df_parsed.loc[~df_parsed["valid"], "raw_sku"].head(20).tolist()
-        st.error("输入中存在无法解析的行（只允许 BASE 或 BASE-S/M/L）。示例：\n" + "\n".join(bad_samples))
-        st.stop()
+# =====================================================
+# 两个独立功能：Tabs + 独立按钮
+# =====================================================
+tab_a, tab_b = st.tabs(["A) 拣货汇总表（Name 排序）", "B) 售出数字列（固定顺序）"])
 
-    # 1) 拣货汇总（Name 字母顺序）
-    df_pick, audit = build_picking_summary(df_parsed)
+with tab_a:
+    st.subheader("A) 拣货汇总表（按 Name 字母顺序）")
+    btn_a = st.button("生成拣货汇总表", type="primary", disabled=(df_parsed is None))
 
-    # 校验：汇总 Subtotal 必须等于输入可解析行数
-    if int(df_pick["Subtotal"].sum()) != audit["parsed_lines"]:
-        st.error("校验失败：拣货汇总总计 != 输入行数（请检查输入）")
-        st.stop()
+    if btn_a:
+        invalid_lines = int((~df_parsed["valid"]).sum())
+        if invalid_lines > 0:
+            bad_samples = df_parsed.loc[~df_parsed["valid"], "raw_sku"].head(30).tolist()
+            st.error("输入中存在无法解析的行（只允许 BASE 或 BASE-S/M/L）。示例：\n" + "\n".join(bad_samples))
+            st.stop()
 
-    # 2) 售出数字列（固定顺序）
-    try:
-        df_sold = build_sold_qty_fixed_order(df_parsed)
-    except ValueError as e:
-        st.error(str(e))
-        st.stop()
+        df_pick, audit = build_picking_summary(df_parsed)
 
-    # 指标
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("输入行数", int(len(df_parsed)))
-    c2.metric("拣货汇总总计", int(df_pick["Subtotal"].sum()))
-    c3.metric("固定顺序行数", len(FIXED_SKU_ORDER))
-    c4.metric("售出合计（S/M/L）", int(df_sold.sum().iloc[0]))
+        # 校验：Subtotal 合计 == 输入行数（有效行数）
+        if int(df_pick["Subtotal"].sum()) != audit["parsed_lines"]:
+            st.error("校验失败：拣货汇总总计 != 输入行数（请检查输入）")
+            st.stop()
 
-    if audit["unknown_bases"]:
-        st.warning("以下 Base SKU 在映射表中未找到（Name=UNKNOWN）：")
-        st.code(", ".join(audit["unknown_bases"]))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("输入行数", int(len(df_parsed)))
+        c2.metric("拣货汇总总计", int(df_pick["Subtotal"].sum()))
+        c3.metric("产品数（行数）", int(len(df_pick)))
 
-    # 输出：拣货汇总表
-    st.subheader("拣货汇总表（按 Name 字母顺序，UNKNOWN 最后）")
-    st.dataframe(df_pick, use_container_width=True, hide_index=True)
-    st.download_button(
-        "下载拣货汇总 CSV",
-        data=csv_bytes(df_pick, header=True),
-        file_name="picking_summary.csv",
-        mime="text/csv"
-    )
+        if audit["unknown_bases"]:
+            st.warning("以下 Base SKU 在映射表中未找到（Name=UNKNOWN）：")
+            st.code(", ".join(audit["unknown_bases"]))
 
-    # 输出：售出数字列（无表头）
-    st.subheader("售出统计数字列（严格按固定 SKU 顺序，无表头）")
-    st.dataframe(df_sold, use_container_width=True, hide_index=True)
-    st.download_button(
-        "下载售出数字列 CSV（无表头）",
-        data=csv_bytes(df_sold, header=False),
-        file_name="sold_qty_column.csv",
-        mime="text/csv"
-    )
+        st.dataframe(df_pick, use_container_width=True, hide_index=True)
+        st.download_button(
+            "下载拣货汇总 CSV",
+            data=csv_bytes(df_pick, header=True),
+            file_name="picking_summary.csv",
+            mime="text/csv"
+        )
+
+with tab_b:
+    st.subheader("B) 售出统计数字列（严格固定 SKU 顺序，无表头）")
+    btn_b = st.button("生成售出数字列", type="primary", disabled=(df_parsed is None))
+
+    if btn_b:
+        invalid_lines = int((~df_parsed["valid"]).sum())
+        if invalid_lines > 0:
+            bad_samples = df_parsed.loc[~df_parsed["valid"], "raw_sku"].head(30).tolist()
+            st.error("输入中存在无法解析的行（只允许 BASE 或 BASE-S/M/L）。示例：\n" + "\n".join(bad_samples))
+            st.stop()
+
+        try:
+            df_sold = build_sold_qty_fixed_order(df_parsed)
+        except ValueError as e:
+            st.error(str(e))
+            st.stop()
+
+        st.write(f"固定 SKU 行数：{len(FIXED_SKU_ORDER)}")
+        st.write(f"售出合计（S/M/L）：{int(df_sold.sum().iloc[0])}")
+
+        st.dataframe(df_sold, use_container_width=True, hide_index=True)
+        st.download_button(
+            "下载售出数字列 CSV（无表头）",
+            data=csv_bytes(df_sold, header=False),
+            file_name="sold_qty_column.csv",
+            mime="text/csv"
+        )
